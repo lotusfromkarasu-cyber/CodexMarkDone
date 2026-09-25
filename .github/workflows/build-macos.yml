@@ -39,7 +39,7 @@ jobs:
           python -m pip install -r requirements-macos.txt
           python -m PyInstaller --noconfirm --windowed --onedir \
             --name CodexMarkDone \
-            --icon assets/CodexMarkDone.png \
+            --icon "$GITHUB_WORKSPACE/assets/CodexMarkDone.png" \
             --osx-bundle-identifier com.lotusfromkarasu.codexmarkdone \
             --collect-all pystray \
             --hidden-import AppKit \
