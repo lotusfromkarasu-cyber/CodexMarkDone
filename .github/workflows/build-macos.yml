@@ -1,0 +1,56 @@
+name: Build macOS app
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag to receive the macOS builds
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Build app bundle
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-macos.txt
+          python -m PyInstaller --noconfirm --windowed --onedir \
+            --name CodexMarkDone \
+            --icon assets/CodexMarkDone.png \
+            --osx-bundle-identifier com.lotusfromkarasu.codexmarkdone \
+            --collect-all pystray \
+            --hidden-import AppKit \
+            --add-data "$GITHUB_WORKSPACE/web:web" \
+            --distpath "$RUNNER_TEMP/dist" \
+            --workpath "$RUNNER_TEMP/work" \
+            --specpath "$RUNNER_TEMP/spec" \
+            scripts/reader_service.py
+          app="$RUNNER_TEMP/dist/CodexMarkDone.app"
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          asset="$RUNNER_TEMP/CodexMarkDone-macOS-${{ matrix.arch }}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$asset"
+          gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --clobber

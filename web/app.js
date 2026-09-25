@@ -117,7 +117,7 @@
     else{for(const it of sel.items){const f=it.node.querySelector('.formula:not(.error)');if(f){payload.raw=f.dataset.latex;payload.mathml=R.mathml(f.dataset.latex,f.dataset.display==='1').outerHTML;break;}}if(!payload.raw)throw Error('选区中没有可解析的公式');}
     return payload;
   }
-  async function copyMode(mode){try{const payload=buildPayload(mode);await api('clipboard',payload);toast(mode==='obsidian'?'已复制 Markdown':mode==='formula'?'已复制 Word 可编辑公式':mode==='latex'?'已复制纯 LaTeX 文本':mode==='wps'?'已复制 WPS 内容与可编辑公式':'已复制 Word 内容与可编辑公式');}catch(e){toast('复制失败：'+e.message);}}
+  async function copyMode(mode){try{const payload=buildPayload(mode);const result=await api('clipboard',payload);if(result.platform==='darwin'){toast(mode==='obsidian'?'已复制 Markdown':mode==='latex'?'已复制纯 LaTeX 文本':mode==='formula'?'已复制公式内容':'已复制格式化内容（macOS）');}else{toast(mode==='obsidian'?'已复制 Markdown':mode==='formula'?'已复制 Word 可编辑公式':mode==='latex'?'已复制纯 LaTeX 文本':mode==='wps'?'已复制 WPS 内容与可编辑公式':'已复制 Word 内容与可编辑公式');}}catch(e){toast('复制失败：'+e.message);}}
   for(const b of [$('#copy-obsidian'),$('#copy-word'),$('#copy-wps'),$('#copy-latex'),$('#copy-formula')])b.addEventListener('click',()=>copyMode(b.dataset.copy));
   $('#select-all').onclick=selectAll;
   $('#multi-toggle').onclick=()=>{

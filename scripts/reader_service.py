@@ -20,7 +20,10 @@ from codex_markdone import set_windows_clipboard, cf_html
 
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
 HOME = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
-DATA = Path.home() / 'AppData' / 'Local' / 'CodexMarkDone'
+if sys.platform == 'win32':
+    DATA = Path.home() / 'AppData' / 'Local' / 'CodexMarkDone'
+else:
+    DATA = Path.home() / 'Library' / 'Application Support' / 'CodexMarkDone'
 
 IMAGE_MIME_TYPES = {
     '.apng': 'image/apng',
@@ -51,10 +54,10 @@ def local_image_path(value):
             raw = urllib.parse.unquote(parsed.path)
             if re.match(r'^/[A-Za-z]:[\\/]', raw):
                 raw = raw[1:]
-    elif re.match(r'^[A-Za-z]:[\\/]', raw) or raw.startswith('\\'):
-        raw = urllib.parse.unquote(raw)
     else:
-        return None
+        raw = urllib.parse.unquote(raw)
+        if not (re.match(r'^[A-Za-z]:[\\/]', raw) or raw.startswith('\\') or Path(raw).is_absolute()):
+            return None
     try:
         path = Path(raw).resolve(strict=True)
         if not path.is_file() or path.suffix.lower() not in IMAGE_MIME_TYPES:
@@ -510,13 +513,18 @@ def make_server(library, port=0):
                                 raise ValueError('无效 MathML')
                             set_windows_clipboard(req['raw'], mathml=req['mathml'])
                         elif mode in ('word', 'wps'):
-                            from office_copy import copy_native
-                            copy_native(req['html'], mode)
+                            if sys.platform == 'darwin':
+                                fragment = req.get('html', '')
+                                rich_html = '<!doctype html><html><head><meta charset="utf-8"></head><body>' + fragment + '</body></html>'
+                                set_windows_clipboard(req.get('plain', ''), rich_html=rich_html)
+                            else:
+                                from office_copy import copy_native
+                                copy_native(req['html'], mode)
                         else:
                             raise ValueError('未知复制方式')
                 else:
                     return self.send({'error':'Not found'}, status=404)
-                self.send({'ok':True})
+                self.send({'ok':True, 'platform':sys.platform})
             except Exception as exc:
                 self.send({'error':str(exc)}, status=400)
 
@@ -535,11 +543,25 @@ def main():
         tid = os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID')
         if tid:
             suffix = '#thread=' + urllib.parse.quote(tid)
-    # A named mutex serializes simultaneous launches before the port file exists.
-    kernel = ctypes.windll.kernel32
-    kernel.CreateMutexW.restype = ctypes.c_void_p
-    mutex = kernel.CreateMutexW(None, True, 'Local\\CodexMarkDone.Reader.v2')
-    already = kernel.GetLastError() == 183
+    # Serialize simultaneous launches before the port file exists.
+    kernel = None
+    mutex = None
+    lock_file = None
+    if sys.platform == 'win32':
+        kernel = ctypes.windll.kernel32
+        kernel.CreateMutexW.restype = ctypes.c_void_p
+        mutex = kernel.CreateMutexW(None, True, 'Local\\CodexMarkDone.Reader.v2')
+        already = kernel.GetLastError() == 183
+    else:
+        import fcntl
+        lock_file = (DATA / 'reader.lock').open('a', encoding='utf-8')
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            already = False
+        except BlockingIOError:
+            lock_file.close()
+            lock_file = None
+            already = True
     if already:
         for _ in range(50):
             instance = read_json(DATA / 'instance.json', {})
@@ -573,11 +595,25 @@ def main():
     finally:
         server.server_close()
         (DATA / 'instance.json').unlink(missing_ok=True)
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-        kernel.CloseHandle(mutex)
+        if kernel is not None and mutex is not None:
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel.CloseHandle(mutex)
+        if lock_file is not None:
+            lock_file.close()
 
 if __name__ == '__main__':
     try:
         main()
     except Exception as exc:
-        ctypes.windll.user32.MessageBoxW(None, str(exc), 'Codex MarkDone', 0x10)
+        if sys.platform == 'win32':
+            ctypes.windll.user32.MessageBoxW(None, str(exc), 'Codex MarkDone', 0x10)
+        else:
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showerror('Codex MarkDone', str(exc), parent=root)
+                root.destroy()
+            except Exception:
+                print(str(exc), file=sys.stderr)

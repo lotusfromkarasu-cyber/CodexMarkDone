@@ -15,6 +15,7 @@ import http.server
 import json
 import os
 import re
+import subprocess
 import sys
 import tkinter as tk
 import webbrowser
@@ -312,8 +313,23 @@ def _global_bytes(data: bytes):
 
 
 def set_windows_clipboard(plain: str, mathml: str | None = None, rich_html: str | None = None) -> None:
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString
+        except ImportError:
+            subprocess.run(["pbcopy"], input=plain.encode("utf-8"), check=True)
+            return
+        if mathml and not rich_html:
+            rich_html = f"<!doctype html><html><body>{mathml}</body></html>"
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        if not pasteboard.setString_forType_(plain, NSPasteboardTypeString):
+            raise OSError("无法写入 macOS 剪贴板")
+        if rich_html and not pasteboard.setString_forType_(rich_html, NSPasteboardTypeHTML):
+            raise OSError("无法写入 HTML 剪贴板")
+        return
     if sys.platform != "win32":
-        raise RuntimeError("Word MathML clipboard is currently implemented for Windows")
+        raise RuntimeError("剪贴板目前支持 Windows 和 macOS")
     user32 = ctypes.windll.user32
     user32.OpenClipboard.argtypes = [ctypes.c_void_p]
     user32.OpenClipboard.restype = ctypes.c_bool
