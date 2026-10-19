@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import io
 import sqlite3
 import sys
 import threading
@@ -40,6 +41,23 @@ IMAGE_MIME_TYPES = {
     '.webp': 'image/webp',
 }
 MAX_LOCAL_IMAGE_BYTES = 32 * 1024 * 1024
+VERSION = '0.2.0'
+
+def rollout_path(path):
+    """Codex keeps the canonical JSONL path in SQLite after compression."""
+    path = Path(path)
+    plain = Path(str(path)[:-4]) if str(path).endswith('.zst') else path
+    for candidate in (plain, Path(str(plain) + '.zst')):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError('会话记录不存在（含压缩记录）：' + str(plain))
+
+def open_rollout(path):
+    if str(path).endswith('.zst'):
+        import zstandard
+        return io.BufferedReader(zstandard.ZstdDecompressor().stream_reader(
+            open(path, 'rb'), closefd=True))
+    return open(path, 'rb')
 
 def local_image_path(value):
     """Resolve an absolute Windows/file URL to an existing image file."""
@@ -147,19 +165,30 @@ class Transcript:
         self.meta = {}
 
     def update(self):
-        st = self.path.stat()
-        stamp = (st.st_size, st.st_mtime_ns)
+        physical = rollout_path(self.path)
+        st = physical.stat()
+        stamp = (st.st_size, st.st_mtime_ns, str(physical))
         if stamp == self.stamp:
             return
-        if st.st_size < self.offset or (self.stamp and st.st_size == self.offset):
+        compressed = str(physical).endswith('.zst')
+        if compressed or (self.stamp and self.stamp[2] != str(physical)) or st.st_size < self.offset or (self.stamp and st.st_size == self.offset):
             self.offset, self.pending, self.items = 0, b'', []
-        with self.path.open('rb') as f:
-            f.seek(self.offset)
-            chunk = f.read()
-            self.offset = f.tell()
-        lines = (self.pending + chunk).split(b'\n')
-        self.pending = lines.pop()
-        for line in lines:
+            self.meta = {}
+        with open_rollout(physical) as f:
+            if not compressed:
+                f.seek(self.offset)
+            self._read_lines(f)
+            self.offset = f.tell() if not compressed else st.st_size
+        self.stamp = stamp
+        self.revision += 1
+
+    def _read_lines(self, stream):
+        for line in stream:
+            line = self.pending + line
+            self.pending = b''
+            if not line.endswith(b'\n'):
+                self.pending = line
+                break
             try:
                 obj = json.loads(line)
                 if obj.get('type') == 'session_meta':
@@ -173,8 +202,6 @@ class Transcript:
                 item['ordinal'] = obj.get('ordinal')
                 item['id'] = str(len(self.items))
                 self.items.append(item)
-        self.stamp = stamp
-        self.revision += 1
 
 class Library:
     def __init__(self, home=HOME):
@@ -214,7 +241,8 @@ class Library:
 
     def _fallback_title(self, path):
         try:
-            st = Path(path).stat()
+            path = rollout_path(path)
+            st = path.stat()
         except OSError:
             return ''
         key = (str(path), st.st_size, st.st_mtime_ns)
@@ -223,7 +251,7 @@ class Library:
         title = ''
         head = b''
         try:
-            with Path(path).open('rb') as f:
+            with open_rollout(path) as f:
                 head = f.read(512 * 1024)
         except OSError:
             pass
@@ -400,22 +428,44 @@ class Library:
             self._idx_cache = payload
             return payload
 
-    def _history(self, tid, before=None, visiting=None):
+    def _reference_path(self, reference):
+        # history_base.thread_id is a physical rollout ID, not necessarily a
+        # sidebar thread ID. Match the filename suffix, not any UUID inside it.
+        candidates = []
+        for folder in ('sessions', 'archived_sessions'):
+            root = self.home / folder
+            for separator in ('-', '_'):
+                candidates.extend(root.glob('**/*' + separator + reference + '.jsonl'))
+                candidates.extend(root.glob('**/*' + separator + reference + '.jsonl.zst'))
+        if candidates:
+            return rollout_path(max(candidates, key=lambda p: p.stat().st_mtime_ns))
+        row = next((x for x in self.catalog['threads'] if x['id'] == reference), None)
+        if row:
+            return rollout_path(row['rollout_path'])
+        raise FileNotFoundError('找不到前序历史记录：' + reference)
+
+    def _history(self, tid, before=None, visiting=None, source=None):
         visiting = set() if visiting is None else visiting
-        if tid in visiting:
-            raise ValueError('分叉会话历史存在循环')
-        visiting = visiting | {tid}
         row = next((x for x in self.catalog['threads'] if x['id'] == tid), None)
-        if row is None:
-            raise FileNotFoundError('找不到此对话的历史：' + tid)
-        if tid not in self.cache or str(self.cache[tid].path) != row['rollout_path']:
-            self.cache[tid] = Transcript(row['rollout_path'])
-        t = self.cache[tid]
+        physical = rollout_path(source or (row['rollout_path'] if row else self._reference_path(tid)))
+        key = str(physical)
+        if key in visiting:
+            raise ValueError('分叉会话历史存在循环')
+        visiting = visiting | {key}
+        if key not in self.cache:
+            self.cache[key] = Transcript(physical)
+        t = self.cache[key]
         t.update()
         inherited = []
+        base = t.meta.get('history_base') or {}
         parent = t.meta.get('forked_from_id')
         cutoff = t.meta.get('forked_from_ordinal_exclusive')
-        if parent and cutoff is not None:
+        if base.get('thread_id') and base.get('end_ordinal_exclusive') is not None:
+            cutoff = base['end_ordinal_exclusive']
+            reference = base['thread_id']
+            inherited = self._history(reference, min(before, cutoff) if before is not None else cutoff,
+                                      visiting, self._reference_path(reference))
+        elif parent and cutoff is not None:
             inherited = self._history(parent, min(before, cutoff) if before is not None else cutoff, visiting)
         own = [dict(m) for m in t.items if before is None or (m.get('ordinal') is not None and m['ordinal'] < before)]
         # Some older forks copied the prefix into their own file.
@@ -430,11 +480,12 @@ class Library:
                 item['id'] = str(i)
             row = next(x for x in self.catalog['threads'] if x['id'] == tid)
             revision = hashlib.sha256(json.dumps(items, sort_keys=True).encode()).hexdigest()[:16]
-            t = self.cache[tid]
+            current_key = str(rollout_path(row['rollout_path']))
+            t = self.cache[current_key]
             result = {'id': tid, 'title': row['title'], 'revision': revision,
                       'mtime': t.stamp[1] if t.stamp else 0, 'messages': items}
             while len(self.cache) > 12:
-                self.cache.pop(next(k for k in self.cache if k != tid))
+                self.cache.pop(next(k for k in self.cache if k != current_key))
             return result
 
 def make_server(library, port=0):
@@ -459,7 +510,7 @@ def make_server(library, port=0):
             q = urllib.parse.parse_qs(u.query)
             try:
                 if u.path == '/api/health':
-                    return self.send({'app':'CodexMarkDone', 'version':2})
+                    return self.send({'app':'CodexMarkDone', 'version':VERSION})
                 if u.path == '/api/library':
                     return self.send(library.index())
                 if u.path == '/api/thread':

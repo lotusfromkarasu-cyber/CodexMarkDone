@@ -1,6 +1,6 @@
 {
   "name": "codex-markdone",
-  "version": "0.1.0+codex.20260905051512",
+  "version": "0.2.0",
   "description": "Local-first Codex Desktop reader with selection-aware Markdown and Word equation copying.",
   "author": {
     "name": "Local developer"

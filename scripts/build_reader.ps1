@@ -5,7 +5,7 @@ $pythonExe = Join-Path $buildRoot 'venv/Scripts/python.exe'
 if (!(Test-Path $pythonExe)) {
     python -m venv "$buildRoot/venv"
 }
-& $pythonExe -m pip install pyinstaller==6.22.2 pystray==0.19.5 Pillow==12.3.0 python-docx==1.2.0 lxml==6.1.3 mathml2omml==0.0.2 pywin32==312
+& $pythonExe -m pip install pyinstaller==6.22.2 pystray==0.19.5 Pillow==12.3.0 python-docx==1.2.0 lxml==6.1.3 mathml2omml==0.0.2 pywin32==312 zstandard==0.25.0
 if ($LASTEXITCODE) { throw 'Dependencies failed' }
 $iconSource = Join-Path $sourceRoot 'assets/CodexMarkDone.ico'
 & $pythonExe (Join-Path $sourceRoot 'assets/generate_icon.py')

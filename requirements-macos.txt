@@ -2,3 +2,4 @@ Pillow==12.3.0
 pyinstaller==6.22.3
 pyobjc-framework-Cocoa==12.2.2
 pystray==0.19.5
+zstandard==0.25.0
