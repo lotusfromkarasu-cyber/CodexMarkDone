@@ -1,5 +1,12 @@
 # 更新记录
 
+## 0.2.1 — 2026-10-20
+
+- Word/WPS 复制彻底移除 GetActiveObject、DispatchEx、Documents.Open 和 Content.Copy 等应用自动化调用。
+- 由 MarkDone 直接生成和写入包含原生数学结构的 RTF 剪贴板，不启动或连接 Word/WPS，不修改应用设置，不留下 Office 剪贴板延迟提供者。
+- 复用原有 MathML → OMML 转换及论文排版，保留公式、表格、中文和标题层级。
+- 新增无 COM 调用约束、RTF 结构及本机 Office RichEdit 隐藏解析器往返测试；测试不打开 Word/WPS 文档。
+
 ## 0.2.0 — 2026-10-19
 
 - 兼容 Codex 自动压缩的 `.jsonl.zst`，无须解压或改写原始会话。

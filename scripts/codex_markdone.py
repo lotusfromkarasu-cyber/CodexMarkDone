@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import sys
 import tkinter as tk
 import webbrowser
@@ -312,7 +313,7 @@ def _global_bytes(data: bytes):
     return handle
 
 
-def set_windows_clipboard(plain: str, mathml: str | None = None, rich_html: str | None = None) -> None:
+def set_windows_clipboard(plain: str, mathml: str | None = None, rich_html: str | None = None, rtf: bytes | None = None) -> None:
     if sys.platform == "darwin":
         try:
             from AppKit import NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString
@@ -338,8 +339,24 @@ def set_windows_clipboard(plain: str, mathml: str | None = None, rich_html: str 
     user32.SetClipboardData.restype = ctypes.c_void_p
     user32.RegisterClipboardFormatW.argtypes = [ctypes.c_wchar_p]
     user32.RegisterClipboardFormatW.restype = ctypes.c_uint
-    if not user32.OpenClipboard(None):
-        raise OSError("无法打开 Windows 剪贴板")
+    # EmptyClipboard requires a valid owner for subsequent SetClipboardData.
+    # A message-only STATIC window cannot appear or receive foreground focus.
+    user32.CreateWindowExW.argtypes = [ctypes.c_ulong, ctypes.c_wchar_p, ctypes.c_wchar_p,
+        ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    user32.CreateWindowExW.restype = ctypes.c_void_p
+    user32.DestroyWindow.argtypes = [ctypes.c_void_p]
+    owner = user32.CreateWindowExW(0, 'STATIC', '', 0, 0, 0, 0, 0,
+                                  ctypes.c_void_p(-3), None, None, None)
+    if not owner:
+        raise OSError('无法创建后台剪贴板所有者')
+    for attempt in range(20):
+        if user32.OpenClipboard(owner):
+            break
+        if attempt == 19:
+            user32.DestroyWindow(owner)
+            raise OSError("剪贴板暂时被其他程序占用，请稍后重试")
+        time.sleep(.025)
     try:
         user32.EmptyClipboard()
         unicode_id = 13  # CF_UNICODETEXT
@@ -349,6 +366,10 @@ def set_windows_clipboard(plain: str, mathml: str | None = None, rich_html: str 
             html_id = user32.RegisterClipboardFormatW("HTML Format")
             if not user32.SetClipboardData(html_id, _global_bytes(rich_html)):
                 raise OSError("无法写入 HTML 剪贴板")
+        if rtf:
+            fmt_id = user32.RegisterClipboardFormatW('Rich Text Format')
+            if not user32.SetClipboardData(fmt_id, _global_bytes(rtf + b'\0')):
+                raise OSError('无法写入 Office 富文本剪贴板')
         if mathml:
             payload = (mathml + "\0").encode("utf-16-le")
             for name in ("MathML", "MathML Presentation"):
@@ -357,6 +378,7 @@ def set_windows_clipboard(plain: str, mathml: str | None = None, rich_html: str 
                     raise OSError(f"无法写入 {name} 剪贴板")
     finally:
         user32.CloseClipboard()
+        user32.DestroyWindow(owner)
 
 
 def copy_markdown(text: str) -> None:

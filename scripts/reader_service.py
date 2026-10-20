@@ -41,7 +41,7 @@ IMAGE_MIME_TYPES = {
     '.webp': 'image/webp',
 }
 MAX_LOCAL_IMAGE_BYTES = 32 * 1024 * 1024
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 
 def rollout_path(path):
     """Codex keeps the canonical JSONL path in SQLite after compression."""

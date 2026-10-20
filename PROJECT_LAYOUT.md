@@ -1,11 +1,18 @@
 # Codex MarkDone
 
-当前版本：**v0.2.0（2026-10-19）**。
+当前版本：**v0.2.1（2026-10-20）**。
+
+## v0.2.1 后台复制
+
+“复制到 Word/WPS”现在由 MarkDone 自行生成并写入 RTF，公式使用 Office 原生数学结构，表格和正文样式保留。复制不再连接或启动 Word/WPS，不打开临时文档、不触发应用的 Content.Copy、不修改应用设置。剪贴板使用不可显示的消息所有者窗口，并短暂重试其他程序的剪贴板占用。
+
+6 项复制测试通过，包括本机 Office RichEdit 引擎的无界面 RTF 往返验证；安装版连续复制及焦点检查见 `releases/v0.2.1/RELEASE.md`。Word/WPS 实际粘贴外观由用户检查，本次不控制其文档窗口。
 
 ## 文件位置
 
 - `source/codex-markdone/`：主源码和原有 Git 历史。后续修改和提交在此进行。
 - `releases/v0.2.0/`：本版完整便携程序、源码快照、安装压缩包、校验清单。
+- `releases/v0.2.1/`：最新后台复制修复版的程序、源码快照、压缩包和校验清单。
 - `archives/`：原 general 根目录中的 09-22、09-24 备份目录和压缩包，原样保留，不覆盖。
 
 已安装程序仍在 `C:\Users\lotus\AppData\Local\Programs\CodexMarkDone\CodexMarkDone.exe`，桌面快捷方式无需更改。

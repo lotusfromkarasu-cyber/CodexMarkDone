@@ -1,8 +1,6 @@
 """Native Word/WPS clipboard, with paper styles and editable OMML equations."""
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-import tempfile
-import threading
+import io
 
 from docx import Document
 from docx.shared import Pt, RGBColor
@@ -229,34 +227,20 @@ def make_document(fragment, path):
 
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='office-clipboard')
-_local = threading.local()
 
 
 def _copy(fragment, target):
-    import pythoncom
-    import win32com.client
-    if not getattr(_local, 'initialized', False):
-        pythoncom.CoInitialize()
-        _local.initialized = True
-    progid = 'kwps.Application' if target == 'wps' else 'Word.Application'
-    # Attach without changing the user's application settings or closing their app.
-    try:
-        app = win32com.client.GetActiveObject(progid)
-    except pythoncom.com_error:
-        try:
-            app = win32com.client.DispatchEx(progid)
-        except pythoncom.com_error as exc:
-            raise RuntimeError('请先安装并打开 ' + ('WPS 文字' if target == 'wps' else 'Microsoft Word')) from exc
-    # Keep the clipboard owner alive; never quit the user's Word/WPS instance.
-    _local.app = app
-    with tempfile.TemporaryDirectory(prefix='markdone-copy-') as folder:
-        path = str(Path(folder) / 'selection.docx')
-        make_document(fragment, path)
-        document = app.Documents.Open(path, ReadOnly=True, AddToRecentFiles=False, Visible=False)
-        try:
-            document.Content.Copy()
-        finally:
-            document.Close(0)
+    if target not in ('word', 'wps'):
+        raise ValueError('未知 Office 复制目标')
+    from codex_markdone import set_windows_clipboard
+    from office_rtf import document_rtf
+    stream = io.BytesIO()
+    make_document(fragment, stream)
+    stream.seek(0)
+    document = Document(stream)
+    rtf = document_rtf(document)
+    plain = html.fragment_fromstring(fragment, create_parent='div').text_content()
+    set_windows_clipboard(plain, rtf=rtf)
     return True
 
 
