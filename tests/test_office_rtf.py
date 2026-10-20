@@ -44,4 +44,18 @@ class OfficeRtfTests(unittest.TestCase):
         self.assertEqual(escape('{x}\\'),r'\{x\}\\')
         self.assertEqual(escape('😀'),r'\u-10179?\u-8704?')
 
+    def test_equations_are_italic_and_never_bold(self):
+        fragment='<h2>Bold heading <math xmlns="http://www.w3.org/1998/Math/MathML"><mi mathvariant="bold">A</mi><mo>=</mo><mi mathvariant="normal">ω</mi><mi>𝐱</mi></math></h2>'
+        stream=io.BytesIO();make_document(fragment,stream);stream.seek(0)
+        document=Document(stream)
+        ns='{http://schemas.openxmlformats.org/officeDocument/2006/math}'
+        for style in document.element.xpath('.//m:r/m:rPr/m:sty'):
+            self.assertEqual(style.get(ns+'val'),'i')
+        self.assertNotIn('𝐱',''.join(document.element.itertext()))
+        rtf=document_rtf(document).decode('ascii')
+        self.assertIn(r'\mmath\b0\i',rtf)
+        self.assertNotIn(r'\msty1',rtf)
+        self.assertNotIn(r'\msty3',rtf)
+        self.assertIn(r'\f2\b0\i\msty2',rtf)
+
 if __name__ == '__main__':unittest.main()

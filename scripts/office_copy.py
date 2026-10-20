@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import io
 from copy import deepcopy
+import unicodedata
 
 from docx import Document
 from docx.shared import Pt, RGBColor
@@ -181,6 +182,16 @@ def _convert_mathml(source, layout=False):
         content = box.find(qn('m:e'))
         if content is not None and not len(content) and not (content.text or '').strip() and box.find(qn('m:boxPr')) is None:
             box.getparent().remove(box)
+    # User preference: every equation uses regular-weight mathematical italic,
+    # independent of source \mathbf/\mathrm or the destination paragraph style.
+    for run in wrapper.xpath('.//m:r', namespaces={'m':MATH_NS}):
+        properties=run.find(qn('m:rPr'))
+        if properties is None:properties=OxmlElement('m:rPr');run.insert(0,properties)
+        for old in list(properties):
+            if old.tag in (qn('m:sty'),qn('m:nor')):properties.remove(old)
+        etree.SubElement(properties,qn('m:sty')).set(qn('m:val'),'i')
+        for text in run.findall(qn('m:t')):
+            text.text=''.join(unicodedata.normalize('NFKC',char) if 'MATHEMATICAL' in unicodedata.name(char,'') and 'BOLD' in unicodedata.name(char,'') else char for char in (text.text or ''))
     for matrix in wrapper.xpath('.//m:m', namespaces={'m':MATH_NS}):
         columns = max((len(row.findall(qn('m:e'))) for row in matrix.findall(qn('m:mr'))), default=0)
         props = matrix.find(qn('m:mPr'))

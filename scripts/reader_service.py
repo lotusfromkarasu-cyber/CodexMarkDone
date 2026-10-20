@@ -42,6 +42,7 @@ IMAGE_MIME_TYPES = {
 }
 MAX_LOCAL_IMAGE_BYTES = 32 * 1024 * 1024
 VERSION = '0.2.2'
+BUILD = '20261020-italic'
 
 def rollout_path(path):
     """Codex keeps the canonical JSONL path in SQLite after compression."""
@@ -510,7 +511,7 @@ def make_server(library, port=0):
             q = urllib.parse.parse_qs(u.query)
             try:
                 if u.path == '/api/health':
-                    return self.send({'app':'CodexMarkDone', 'version':VERSION})
+                    return self.send({'app':'CodexMarkDone', 'version':VERSION, 'build':BUILD})
                 if u.path == '/api/library':
                     return self.send(library.index())
                 if u.path == '/api/thread':

@@ -19,7 +19,8 @@ def main():
     def process_ids():
         return sorted(subprocess.check_output(['powershell','-NoProfile','-Command',
             'Get-Process WINWORD,wps -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id'],text=True).split())
-    assert get('api/health')['version']=='0.2.2'
+    health=get('api/health')
+    assert health['version']=='0.2.2' and health['build']=='20261020-italic'
     token=get('api/settings')['token']; before=process_ids()
     user=ctypes.windll.user32;user.GetForegroundWindow.restype=ctypes.c_void_p
     fragment='<h2>后台复制测试</h2><p>公式 <math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mi>x</mi><msqrt><mi>y</mi></msqrt></mfrac></math></p><table><tr><td>参数</td><td>值</td></tr></table>'
@@ -45,6 +46,8 @@ def main():
         payload=win32clipboard.GetClipboardData(win32clipboard.RegisterClipboardFormat('Rich Text Format'))
         payload=payload.decode('ascii') if isinstance(payload,bytes) else payload
         assert all(t in payload for t in (r'\mmath',r'\mrad',r'\trowd'))
+        assert r'\mmath\b0\i' in payload
+        assert r'\msty1' not in payload and r'\msty3' not in payload
     finally:win32clipboard.CloseClipboard()
     assert before==process_ids(),'Office processes changed during test'
     assert focus_changes==0,'Foreground changed during test; check for unrelated user actions'

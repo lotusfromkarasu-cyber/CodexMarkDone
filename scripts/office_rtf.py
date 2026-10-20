@@ -36,12 +36,7 @@ def math(node):
     if ns != M: raise ValueError('不支持的公式命名空间：' + ns)
     if tag == 't': return escape(node.text)
     if tag == 'r':
-        properties = node.find(qn('m:rPr'))
-        controls = r'\f2 '
-        if properties is not None:
-            sty = properties.find(qn('m:sty'))
-            if sty is not None:
-                controls += '\\msty' + str({'p':0,'b':1,'i':2,'bi':3}[sty.get(qn('m:val'))]) + ' '
+        controls = r'\f2\b0\i\msty2 '
         return '{\\mr ' + controls + ''.join(math(c) for c in node if c.tag != qn('m:rPr')) + '}'
     if tag in ('rPr', 'ctrlPr'): return ''
     control = {'oMath':'moMath','oMathPara':'moMathPara','sSub':'msSub','sSup':'msSup','sSubSup':'msSubSup'}.get(tag, 'm' + tag)
@@ -95,7 +90,7 @@ def paragraph(node, in_table=False, end=True):
     for child in node:
         if child.tag == qn('w:r'): parts.append(run(child))
         elif child.tag in (qn('m:oMath'), qn('m:oMathPara')):
-            parts.append('{\\mmath ' + math(child) + '}')
+            parts.append('{\\mmath\\b0\\i ' + math(child) + '}')
     return ''.join(parts) + (r'\par ' if end else '')
 
 def table(node):
