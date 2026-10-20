@@ -19,10 +19,12 @@ def main():
     def process_ids():
         return sorted(subprocess.check_output(['powershell','-NoProfile','-Command',
             'Get-Process WINWORD,wps -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id'],text=True).split())
-    assert get('api/health')['version']=='0.2.1'
+    assert get('api/health')['version']=='0.2.2'
     token=get('api/settings')['token']; before=process_ids()
     user=ctypes.windll.user32;user.GetForegroundWindow.restype=ctypes.c_void_p
     fragment='<h2>后台复制测试</h2><p>公式 <math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mi>x</mi><msqrt><mi>y</mi></msqrt></mfrac></math></p><table><tr><td>参数</td><td>值</td></tr></table>'
+    cases=json.loads((Path(__file__).parent/'fixtures/office_math_cases.json').read_text(encoding='utf8'))
+    fragment+=''.join('<p>'+case['html']+'</p>' for case in cases)
     focus_changes=0;latencies=[]
     for index in range(12):
         focus=user.GetForegroundWindow();start=time.perf_counter()

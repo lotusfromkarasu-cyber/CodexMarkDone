@@ -1,10 +1,12 @@
 """Native Word/WPS clipboard, with paper styles and editable OMML equations."""
 from concurrent.futures import ThreadPoolExecutor
 import io
+from copy import deepcopy
 
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn
 from lxml import etree, html
@@ -99,6 +101,111 @@ def _hide_square_root_degree_placeholder(omml):
     return ''.join(etree.tostring(child, encoding='unicode') for child in wrapper)
 
 
+def _convert_mathml(source, layout=False):
+    """Separate KaTeX display layout from mathematical matrices before OMML."""
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
+    root = etree.fromstring(source.encode('utf8'), parser)
+    def name(node): return etree.QName(node).localname
+    def children(node):
+        return [c for c in node if isinstance(c.tag, str) and name(c) not in ('annotation', 'annotation-xml')]
+    semantic = next((c for c in root if name(c) == 'semantics'), root)
+    body = children(semantic)
+    number = ''
+    # KaTeX \tag: 50% spacer | formula | 50% spacer | number.
+    if len(body) == 1 and name(body[0]) == 'mtable' and body[0].get('width') == '100%':
+        rows = children(body[0])
+        cells = children(rows[0]) if len(rows) == 1 else []
+        if len(cells) == 4 and all(cells[i].get('width') == '50%' and not children(cells[i]) and not (cells[i].text or '').strip() for i in (0,2)):
+            number = ''.join(cells[3].itertext())
+            body = children(cells[1])
+    def convert(nodes, normalize=False):
+        math = etree.Element('{'+_MATHML_NS+'}math', nsmap={None:_MATHML_NS})
+        row = etree.SubElement(math, '{'+_MATHML_NS+'}mrow')
+        for node in nodes: row.append(deepcopy(node))
+        value = etree.tostring(math, encoding='unicode')
+        if normalize: return _convert_mathml(value)
+        try:
+            return mathml2omml.convert(value)
+        except RuntimeError as exc:
+            if 'Too large number of children for ' not in str(exc): raise
+            return mathml2omml.convert(_group_excess_mathml_children(value))
+    # Aligned/alignedat arrays have alternating right/left columns, unlike
+    # actual matrices (center columns). Combine alignment cells into each row.
+    while len(body) == 1 and name(body[0]) == 'mrow': body = children(body[0])
+    if len(body) == 1 and name(body[0]) == 'mtable' and body[0].get('columnalign','').split()[:2] == ['right','left']:
+        if layout:
+            rows=[]
+            for row in children(body[0]):
+                rows.append([convert(children(cell), normalize=True) if ''.join(cell.itertext()).strip() else '' for cell in children(row)])
+            return {'rows':rows,'number':number}
+        outer = etree.Element(qn('m:oMath'))
+        # Explicit right/left math columns preserve KaTeX's relation alignment
+        # across Office RTF importers (which differ in eqArr alignment markers).
+        array = etree.SubElement(outer, qn('m:m'))
+        props = etree.SubElement(array, qn('m:mPr'))
+        groups = etree.SubElement(props, qn('m:mcs'))
+        alignments = body[0].get('columnalign').split()
+        col = etree.SubElement(groups, qn('m:mc'))
+        col_props = etree.SubElement(col, qn('m:mcPr'))
+        etree.SubElement(col_props, qn('m:count')).set(qn('m:val'),str(len(alignments)))
+        etree.SubElement(col_props, qn('m:mcJc')).set(qn('m:val'),'left')
+        for row in children(body[0]):
+            matrix_row = etree.SubElement(array, qn('m:mr'))
+            for cell in children(row):
+                nodes = children(cell)
+                entry = etree.SubElement(matrix_row, qn('m:e'))
+                if not ''.join(cell.itertext()).strip():
+                    run = etree.SubElement(entry, qn('m:r'))
+                    etree.SubElement(run, qn('m:t')).text = '\u2007'
+                    continue
+                converted = etree.fromstring(('<root xmlns:m="'+MATH_NS+'" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'+convert(nodes)+'</root>').encode())
+                for equation in converted:
+                    for child in list(equation): entry.append(child)
+        if number:
+            entry = array[-1][-1]
+            run = etree.SubElement(entry, qn('m:r'))
+            etree.SubElement(run, qn('m:t')).text = '\u2003' + number
+        omml = etree.tostring(outer, encoding='unicode')
+    else:
+        if layout: return None
+        omml = convert(body)
+        if number:
+            wrapper = etree.fromstring(('<root xmlns:m="'+MATH_NS+'" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'+omml+'</root>').encode())
+            run = etree.SubElement(wrapper[-1], qn('m:r'))
+            etree.SubElement(run, qn('m:t')).text = '\u2003' + number
+            omml = ''.join(etree.tostring(c, encoding='unicode') for c in wrapper)
+    wrapper = etree.fromstring(('<root xmlns:m="'+MATH_NS+'" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'+omml+'</root>').encode())
+    # Empty KaTeX mrow alignment/spacing groups become empty OMML boxes.
+    # They are layout artifacts, unlike a missing operand of a fraction.
+    for box in reversed(wrapper.xpath('.//m:box', namespaces={'m':MATH_NS})):
+        content = box.find(qn('m:e'))
+        if content is not None and not len(content) and not (content.text or '').strip() and box.find(qn('m:boxPr')) is None:
+            box.getparent().remove(box)
+    for matrix in wrapper.xpath('.//m:m', namespaces={'m':MATH_NS}):
+        columns = max((len(row.findall(qn('m:e'))) for row in matrix.findall(qn('m:mr'))), default=0)
+        props = matrix.find(qn('m:mPr'))
+        if props is None:
+            props=OxmlElement('m:mPr');matrix.insert(0,props)
+        if columns and props.find(qn('m:mcs')) is None:
+            group=etree.SubElement(props,qn('m:mcs'))
+            column=etree.SubElement(group,qn('m:mc'))
+            column_props=etree.SubElement(column,qn('m:mcPr'))
+            etree.SubElement(column_props,qn('m:count')).set(qn('m:val'),str(columns))
+            etree.SubElement(column_props,qn('m:mcJc')).set(qn('m:val'),'center')
+    for nary in wrapper.xpath('.//m:nary', namespaces={'m':MATH_NS}):
+        properties = nary.find(qn('m:naryPr'))
+        if properties is None:
+            properties = OxmlElement('m:naryPr'); nary.insert(0,properties)
+        for arg in ('sub','sup'):
+            limit = nary.find(qn('m:'+arg))
+            if limit is None or not ''.join(limit.itertext()).strip():
+                flag = properties.find(qn('m:'+arg+'Hide'))
+                if flag is None: flag=OxmlElement('m:'+arg+'Hide');properties.append(flag)
+                flag.set(qn('m:val'),'1')
+    omml = ''.join(etree.tostring(c, encoding='unicode') for c in wrapper)
+    return _hide_square_root_degree_placeholder(omml)
+
+
 def make_document(fragment, path):
     root = html.fragment_fromstring(fragment, create_parent='div')
     doc = Document()
@@ -122,16 +229,7 @@ def make_document(fragment, path):
             tag = etree.QName(child).localname.lower()
             if tag == 'math':
                 source = etree.tostring(child, encoding='unicode', with_tail=False)
-                try:
-                    omml = mathml2omml.convert(source)
-                except RuntimeError as exc:
-                    if 'Too large number of children for ' not in str(exc):
-                        raise
-                    repaired = _group_excess_mathml_children(source)
-                    if repaired == source:
-                        raise
-                    omml = mathml2omml.convert(repaired)
-                omml = _hide_square_root_degree_placeholder(omml)
+                omml = _convert_mathml(source)
                 # The converter returns an XML fragment without namespace declarations.
                 wrapper = etree.fromstring(('<root xmlns:m="' + MATH_NS +
                     '" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' + omml + '</root>').encode())
@@ -150,6 +248,40 @@ def make_document(fragment, path):
         tag = etree.QName(node).localname.lower()
         if tag in ('script', 'style', 'button', 'hr'):
             return
+        maths = ([node] if tag == 'math' else node.xpath('.//math'))
+        if len(maths) == 1 and maths[0].get('display') == 'block' and ''.join(node.itertext()).strip() == ''.join(maths[0].itertext()).strip():
+            source=etree.tostring(maths[0],encoding='unicode',with_tail=False)
+            layout=_convert_mathml(source,layout=True)
+            if layout:
+                columns=max(len(row) for row in layout['rows'])
+                table=container.add_table(rows=0,cols=columns+1)
+                table.autofit=False
+                borders=OxmlElement('w:tblBorders')
+                for edge in ('top','left','bottom','right','insideH','insideV'):
+                    edge_node=OxmlElement('w:'+edge);edge_node.set(qn('w:val'),'nil');borders.append(edge_node)
+                table._tbl.tblPr.append(borders)
+                total=doc.sections[0].page_width-doc.sections[0].left_margin-doc.sections[0].right_margin
+                widths=[Pt(42)]*(columns-1)+[total-Pt(42)*columns,Pt(42)]
+                for col,width in zip(table.columns,widths):col.width=width
+                for index,row in enumerate(layout['rows']):
+                    cells=table.add_row().cells
+                    for cell,width in zip(cells,widths):
+                        cell.width=width;cell.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                    for column,value in enumerate(row):
+                        p=cells[column].paragraphs[0]
+                        p.alignment=WD_ALIGN_PARAGRAPH.RIGHT if column%2==0 else WD_ALIGN_PARAGRAPH.LEFT
+                        p.paragraph_format.first_line_indent=Pt(0)
+                        if value:
+                            # Keep the cell's equation inline: Office otherwise
+                            # auto-centers a math-only paragraph independently
+                            # of the paragraph/cell alignment.
+                            p.add_run('\u200b')
+                            wrapper=etree.fromstring(('<root xmlns:m="'+MATH_NS+'" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'+_hide_square_root_degree_placeholder(value)+'</root>').encode())
+                            for equation in wrapper:p._p.append(equation)
+                    cells[-1].paragraphs[0].paragraph_format.first_line_indent=Pt(0)
+                    cells[-1].paragraphs[0].alignment=WD_ALIGN_PARAGRAPH.RIGHT
+                    if index==len(layout['rows'])-1:cells[-1].paragraphs[0].add_run(layout['number'])
+                return
         if tag == 'table':
             rows = node.xpath('./tr|./thead/tr|./tbody/tr|./tfoot/tr')
             if not rows:

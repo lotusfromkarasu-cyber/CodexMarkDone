@@ -100,6 +100,8 @@ def paragraph(node, in_table=False, end=True):
 
 def table(node):
     result=[]
+    borders=node.find('./'+qn('w:tblPr')+'/'+qn('w:tblBorders'))
+    borderless=borders is not None and all(c.get(qn('w:val')) in ('nil','none') for c in borders)
     for row in node.findall(qn('w:tr')):
         cells=row.findall(qn('w:tc'))
         result.append(r'\trowd\trgaph108\trleft0 ')
@@ -107,7 +109,10 @@ def table(node):
         for cell in cells:
             width=cell.find('./'+qn('w:tcPr')+'/'+qn('w:tcW'))
             right += int(width.get(qn('w:w'))) if width is not None and width.get(qn('w:type'))=='dxa' else 9000//max(1,len(cells))
-            result.append(r'\clbrdrt\brdrs\brdrw10\clbrdrl\brdrs\brdrw10\clbrdrb\brdrs\brdrw10\clbrdrr\brdrs\brdrw10'+'\\cellx'+str(right)+' ')
+            rule='' if borderless else r'\clbrdrt\brdrs\brdrw10\clbrdrl\brdrs\brdrw10\clbrdrb\brdrs\brdrw10\clbrdrr\brdrs\brdrw10'
+            valign=cell.find('./'+qn('w:tcPr')+'/'+qn('w:vAlign'))
+            if valign is not None and valign.get(qn('w:val'))=='center':rule+=r'\clvertalc '
+            result.append(rule+'\\cellx'+str(right)+' ')
         for cell in cells:
             paragraphs=cell.findall(qn('w:p'))
             for index, p in enumerate(paragraphs): result.append(paragraph(p,True,index<len(paragraphs)-1))
