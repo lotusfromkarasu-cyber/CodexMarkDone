@@ -1,4 +1,5 @@
 import io
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -9,6 +10,35 @@ from office_copy import make_document, copy_native
 from office_rtf import document_rtf, escape
 
 class OfficeRtfTests(unittest.TestCase):
+    def test_word_clears_text_bold_but_wps_and_equations_stay_unchanged(self):
+        fragment = ('<h2>Heading</h2><p>Normal <strong>Figure 5(b) 中文 '
+                    '<em>nested emphasis</em></strong> after '
+                    '<math xmlns="http://www.w3.org/1998/Math/MathML">'
+                    '<mfrac><mi>x</mi><mi>y</mi></mfrac></math></p>'
+                    '<table><tr><th>Header</th></tr><tr><td><b>Cell</b></td></tr></table>')
+        stream = io.BytesIO(); make_document(fragment, stream); stream.seek(0)
+        baseline = document_rtf(Document(stream))
+        payloads = {}
+        for target in ('word', 'wps'):
+            with patch('codex_markdone.set_windows_clipboard') as write:
+                self.assertTrue(copy_native(fragment, target))
+                payloads[target] = write.call_args.kwargs['rtf']
+        # WPS must be byte-for-byte identical to the original serialization.
+        self.assertEqual(payloads['wps'], baseline)
+        word = payloads['word'].decode('ascii')
+        wps = payloads['wps'].decode('ascii')
+        self.assertRegex(wps, r'\\b ')
+        self.assertNotRegex(word, r'\\(?:b|ab)(?!0\b)(?:\d+)?(?=[^a-zA-Z]|$)')
+        for text in ('Heading', 'Normal ', 'Figure 5(b) 中文 ', 'nested emphasis', ' after ', 'Header', 'Cell'):
+            self.assertIn(escape(text), word)
+        for text in ('Figure', 'Header', 'Cell'):
+            self.assertRegex(word, r'\{\\b0\\ab0 (?:\\fs\d+ )?' + text)
+        self.assertIn(r'\i ', word)  # ordinary italic emphasis is still retained
+        self.assertEqual(re.findall(r'\{\\mr [^{}]*\}', word),
+                         re.findall(r'\{\\mr [^{}]*\}', wps))
+        for token in (r'\mmath\b0\i', r'\mf ', r'\mnum ', r'\mden ', r'\trowd', r'\outlinelevel1'):
+            self.assertIn(token, word)
+
     def test_editable_math_table_and_unicode(self):
         fragment = '<h2>中文标题</h2><p><b>加粗</b><math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><msup><mi>x</mi><mn>2</mn></msup><msqrt><mi>y</mi></msqrt></mfrac></math></p><table><tr><th>变量</th><th>值</th></tr><tr><td>x</td><td>1</td></tr></table>'
         stream=io.BytesIO();make_document(fragment,stream);stream.seek(0)

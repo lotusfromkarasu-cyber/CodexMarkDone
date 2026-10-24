@@ -50,11 +50,15 @@ def math(node):
     prefix = '\\*' if tag in ('oMath','oMathPara') else ''
     return '{' + prefix + '\\' + control + ' ' + ''.join(math(c) for c in node) + '}'
 
-def run(node):
-    controls = ''
+def run(node, suppress_text_bold=False):
+    # Explicit resets prevent Word inheriting bold from the paste destination.
+    # This option is only used for Word; WPS keeps the original rich formatting.
+    controls = r'\b0\ab0 ' if suppress_text_bold else ''
     prop = node.find(qn('w:rPr'))
     if prop is not None:
         for name, control in [('b','b'),('i','i')]:
+            if name == 'b' and suppress_text_bold:
+                continue
             child = prop.find(qn('w:'+name))
             if child is not None and child.get(qn('w:val'), '1') not in ('0','false'):
                 controls += '\\' + control + ' '
@@ -67,8 +71,10 @@ def run(node):
         elif child.tag == qn('w:tab'): content.append(r'\tab ')
     return '{' + controls + ''.join(content) + '}'
 
-def paragraph(node, in_table=False, end=True):
+def paragraph(node, in_table=False, end=True, suppress_text_bold=False):
     controls = r'\pard\plain\f0\af1\lang2052\langfe2052\fs21\cf1\highlight0\sl336\slmult1\sa160 '
+    if suppress_text_bold:
+        controls += r'\b0\ab0 '
     controls += r'\intbl ' if in_table else ''
     properties = node.find(qn('w:pPr'))
     if properties is not None:
@@ -88,12 +94,12 @@ def paragraph(node, in_table=False, end=True):
         if properties.find(qn('w:keepNext')) is not None: controls += r'\keepn '
     parts = [controls]
     for child in node:
-        if child.tag == qn('w:r'): parts.append(run(child))
+        if child.tag == qn('w:r'): parts.append(run(child, suppress_text_bold))
         elif child.tag in (qn('m:oMath'), qn('m:oMathPara')):
             parts.append('{\\mmath\\b0\\i ' + math(child) + '}')
     return ''.join(parts) + (r'\par ' if end else '')
 
-def table(node):
+def table(node, suppress_text_bold=False):
     result=[]
     borders=node.find('./'+qn('w:tblPr')+'/'+qn('w:tblBorders'))
     borderless=borders is not None and all(c.get(qn('w:val')) in ('nil','none') for c in borders)
@@ -110,17 +116,17 @@ def table(node):
             result.append(rule+'\\cellx'+str(right)+' ')
         for cell in cells:
             paragraphs=cell.findall(qn('w:p'))
-            for index, p in enumerate(paragraphs): result.append(paragraph(p,True,index<len(paragraphs)-1))
+            for index, p in enumerate(paragraphs): result.append(paragraph(p,True,index<len(paragraphs)-1,suppress_text_bold))
             result.append(r'\cell ')
         result.append(r'\row ')
     return ''.join(result)
 
-def document_rtf(document):
+def document_rtf(document, *, suppress_text_bold=False):
     parts=[r'{\rtf1\ansi\ansicpg1252\deff0\uc1',
            r'{\fonttbl{\f0\froman Times New Roman;}{\f1\fnil\fcharset134 SimSun;}{\f2\froman Cambria Math;}}',
            r'{\colortbl;\red0\green0\blue0;}', r'\viewkind4 ']
     for node in document.element.body:
-        if node.tag == qn('w:p'): parts.append(paragraph(node))
-        elif node.tag == qn('w:tbl'): parts.append(table(node))
+        if node.tag == qn('w:p'): parts.append(paragraph(node, suppress_text_bold=suppress_text_bold))
+        elif node.tag == qn('w:tbl'): parts.append(table(node, suppress_text_bold))
     parts.append('}')
     return ''.join(parts).encode('ascii')

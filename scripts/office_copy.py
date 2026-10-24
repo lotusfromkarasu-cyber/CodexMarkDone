@@ -381,7 +381,7 @@ def _copy(fragment, target):
     make_document(fragment, stream)
     stream.seek(0)
     document = Document(stream)
-    rtf = document_rtf(document)
+    rtf = document_rtf(document, suppress_text_bold=target == 'word')
     plain = html.fragment_fromstring(fragment, create_parent='div').text_content()
     set_windows_clipboard(plain, rtf=rtf)
     return True

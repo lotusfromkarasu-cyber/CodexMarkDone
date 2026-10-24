@@ -28,8 +28,8 @@ class RichEditTests(unittest.TestCase):
             _pack_=4
             _fields_=[('cookie',c.c_size_t),('error',c.c_ulong),('callback',callback)]
         stream=io.BytesIO()
-        make_document('<p>中文 <math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><msup><mi>x</mi><mn>2</mn></msup><msqrt><mi>y</mi></msqrt></mfrac></math></p><table><tr><td>A</td><td>B</td></tr></table>',stream)
-        stream.seek(0); source=io.BytesIO(document_rtf(Document(stream))); output=bytearray()
+        make_document('<p><strong>Figure 5(b) 中文</strong> <math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><msup><mi>x</mi><mn>2</mn></msup><msqrt><mi>y</mi></msqrt></mfrac></math></p><table><tr><th>A</th><td>B</td></tr></table>',stream)
+        stream.seek(0); source=io.BytesIO(document_rtf(Document(stream),suppress_text_bold=True)); output=bytearray()
         @callback
         def read(cookie,buf,size,count):
             data=source.read(size);c.memmove(buf,data,len(data));count[0]=len(data);return 0
@@ -42,6 +42,8 @@ class RichEditTests(unittest.TestCase):
             rtf=output.decode('ascii')
             for token in (r'\mmath',r'\mf',r'\msSup',r'\mrad',r'\trowd'):
                 self.assertIn(token,rtf)
+            self.assertIn('Figure 5(b)',rtf)
+            self.assertNotRegex(rtf,r'\\(?:b|ab)(?!0\b)(?:\d+)?(?=[^a-zA-Z]|$)')
         finally:
             user.DestroyWindow(hwnd)
             c.windll.ole32.OleUninitialize()

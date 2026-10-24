@@ -42,7 +42,7 @@ IMAGE_MIME_TYPES = {
 }
 MAX_LOCAL_IMAGE_BYTES = 32 * 1024 * 1024
 VERSION = '0.2.2'
-BUILD = '20261020-italic'
+BUILD = '20261024-word-regular'
 
 def rollout_path(path):
     """Codex keeps the canonical JSONL path in SQLite after compression."""

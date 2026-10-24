@@ -4,6 +4,7 @@ Does not connect to Word/WPS, activate windows or open documents.
 """
 import ctypes
 import json
+import re
 from pathlib import Path
 import subprocess
 import time
@@ -20,12 +21,22 @@ def main():
         return sorted(subprocess.check_output(['powershell','-NoProfile','-Command',
             'Get-Process WINWORD,wps -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id'],text=True).split())
     health=get('api/health')
-    assert health['version']=='0.2.2' and health['build']=='20261020-italic'
+    assert health['version']=='0.2.2' and health['build']=='20261024-word-regular'
     token=get('api/settings')['token']; before=process_ids()
     user=ctypes.windll.user32;user.GetForegroundWindow.restype=ctypes.c_void_p
     fragment='<h2>后台复制测试</h2><p>公式 <math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mi>x</mi><msqrt><mi>y</mi></msqrt></mfrac></math></p><table><tr><td>参数</td><td>值</td></tr></table>'
     cases=json.loads((Path(__file__).parent/'fixtures/office_math_cases.json').read_text(encoding='utf8'))
     fragment+=''.join('<p>'+case['html']+'</p>' for case in cases)
+    def clipboard_rtf():
+        for attempt in range(20):
+            try:win32clipboard.OpenClipboard();break
+            except Exception:
+                if attempt==19:raise
+                time.sleep(.025)
+        try:
+            payload=win32clipboard.GetClipboardData(win32clipboard.RegisterClipboardFormat('Rich Text Format'))
+            return payload.decode('ascii') if isinstance(payload,bytes) else payload
+        finally:win32clipboard.CloseClipboard()
     focus_changes=0;latencies=[]
     for index in range(12):
         focus=user.GetForegroundWindow();start=time.perf_counter()
@@ -37,6 +48,13 @@ def main():
             raise RuntimeError(exc.read().decode('utf8')) from exc
         latencies.append(time.perf_counter()-start)
         focus_changes+=user.GetForegroundWindow()!=focus
+        payload=clipboard_rtf()
+        bold_controls=re.findall(r'\\(?:b|ab)(?!0\b)(?:\d+)?(?=[^a-zA-Z]|$)',payload)
+        if index%2==0:
+            assert not bold_controls,'Word clipboard retained text bold'
+            assert r'\b0\ab0 ' in payload
+        else:
+            assert bold_controls,'WPS heading formatting changed'
     for attempt in range(20):
         try:win32clipboard.OpenClipboard();break
         except Exception:
@@ -52,6 +70,7 @@ def main():
     assert before==process_ids(),'Office processes changed during test'
     assert focus_changes==0,'Foreground changed during test; check for unrelated user actions'
     print(json.dumps({'copies':12,'foreground_changes':focus_changes,'office_process_ids_unchanged':True,
-        'native_math_and_tables_in_clipboard':True,'max_seconds':round(max(latencies),3)}))
+        'native_math_and_tables_in_clipboard':True,'word_text_regular_wps_bold_preserved':True,
+        'max_seconds':round(max(latencies),3)}))
 
 if __name__=='__main__':main()
