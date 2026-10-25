@@ -1,7 +1,7 @@
 (() => {
   const $=s=>document.querySelector(s), R=ReaderRender, reader=$('#reader'), host=$('#messages'), pop=$('#copy-popover'), focusBody=$('#focus-body');
   let settings={},token='',library={threads:[],projects:[]},current=null,revision=null,items=[],sel=null,pending=null,hits=[],hitIndex=-1,busy=false,saveTimer,toastTimer,multiMode=false,turnRAF=null,focusIndex=-1,dragging=false,navSig='';
-  let queuedRender=null;
+  let queuedRender=null,queuedNavigation=null;
   const mtimeOf=new Map();
   let autoSync=true,syncTimer=null,idlePolls=0;
   const SYNC_FAST=3000,SYNC_IDLE=8000;
@@ -201,6 +201,19 @@
     while(renderCache.size>4)renderCache.delete(renderCache.keys().next().value);
   }
   function setScrollTop(v){reader.style.scrollBehavior='auto';reader.scrollTop=v;reader.style.scrollBehavior='';}
+  function jumpToMessage(id){
+    queuedNavigation=id;
+    // Message navigation includes cards that the initial render queue has not
+    // created yet. Keep the request until that queue has finished.
+    if(queuedRender)return;
+    queuedNavigation=null;
+    const card=cards.get(id);if(!card)return;
+    const top=reader.scrollTop+card.getBoundingClientRect().top-reader.getBoundingClientRect().top-reader.clientTop;
+    // A long smooth scroll is aborted by a sync update restoring scrollTop.
+    // Jump inside the reader only, without animating through earlier turns.
+    setScrollTop(top);updateTurns();
+    $('#message-nav').querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.message===id));
+  }
   function renderCards(msgs,start,end){
     for(let i=start;i<end;i++){
       const m=msgs[i];
@@ -212,7 +225,7 @@
     const end=Math.min(q.i+24,q.list.length);
     renderCards(q.list,q.i,end);q.i=end;assignTurns();renderTurns();
     if(q.i<q.list.length){queuedRender.raf=requestAnimationFrame(pumpQueue);}
-    else{queuedRender=null;setScrollTop(settings.positions?.[current]||0);if($('#content-search').value)search(false);if(!$('#focus-modal').hidden&&focusIndex>=0&&focusIndex<items.length)focusRender();cacheRender($('#thread-title').textContent);}
+    else{queuedRender=null;if(queuedNavigation)jumpToMessage(queuedNavigation);else setScrollTop(settings.positions?.[current]||0);if($('#content-search').value)search(false);if(!$('#focus-modal').hidden&&focusIndex>=0&&focusIndex<items.length)focusRender();cacheRender($('#thread-title').textContent);}
   }
   function applyThread(data,initial=false){
     const atBottom=reader.scrollHeight-reader.scrollTop-reader.clientHeight<90,top=reader.scrollTop;
@@ -238,12 +251,13 @@
       else{if(!$('#content-search').value)cacheRender(data.title);}
     }else if(atBottom){reader.scrollTop=reader.scrollHeight;}
     else{reader.scrollTop=top;$('#new-content').hidden=false;}
+    if(!chunked&&queuedNavigation)jumpToMessage(queuedNavigation);
     if(!chunked&&!$('#focus-modal').hidden&&focusIndex>=0&&focusIndex<items.length)focusRender();
   }
   async function openThread(id){
     clearSelection(false);focusClose();
     if(current){settings.positions??={};settings.positions[current]=reader.scrollTop;}
-    current=id;revision=null;pending=null;items=[];cards.clear();navSig='';
+    current=id;revision=null;pending=null;items=[];cards.clear();navSig='';queuedNavigation=null;
     cancelQueued();
     host.replaceChildren();
     $('#message-nav').replaceChildren();$('#turn-nav').replaceChildren();
@@ -275,15 +289,16 @@
 
   /* ---------- right sidebar: turns + message nav ---------- */
   function renderTurns(){
-    const nav=$('#turn-nav'),users=[...host.querySelectorAll('.message.user')];
+    const nav=$('#turn-nav'),scroll=nav.scrollTop,users=[...host.querySelectorAll('.message.user')];
     nav.replaceChildren();nav.hidden=users.length===0;
     users.forEach((card,i)=>{const row=document.createElement('div');row.className='turn-node';row.dataset.turn=card._turn;
       const dot=document.createElement('span');dot.className='turn-dot';dot.textContent=i+1;
       const txt=document.createElement('span');txt.className='turn-text';txt.textContent=preview(card.querySelector('.message-body').textContent||'未命名提问');txt.title=card._raw||card.querySelector('.message-body').textContent;
       const btn=document.createElement('button');btn.className='turn-pick';btn.textContent='选回答';btn.title='选择这一轮的全部回答';
       row.append(dot,txt,btn);
-      row.addEventListener('click',ev=>{if(ev.target.closest('.turn-pick')){selectTurn(card);return;}card.scrollIntoView({block:'start',behavior:'smooth'});});
+      row.addEventListener('click',ev=>{if(ev.target.closest('.turn-pick')){selectTurn(card);return;}jumpToMessage(card.dataset.id);});
       nav.append(row);});
+    nav.scrollTop=scroll;
   }
   function updateTurns(){
     turnRAF=null;const nav=$('#turn-nav');if(nav.hidden||!nav.children.length)return;
@@ -297,7 +312,7 @@
     const nav=$('#message-nav'),scroll=nav.scrollTop;nav.replaceChildren();
     for(const m of items){const b=document.createElement('button');b.className='nav-item';b.dataset.message=m.id;
       b.innerHTML='<small>'+ (m.role==='user'?'你':'Codex') +(m.channel==='commentary'?' · 进度':'')+'</small>'+R.esc(preview(m.raw));
-      b.onclick=()=>{const card=cards.get(m.id);card?.scrollIntoView({block:'start',behavior:'smooth'});nav.querySelectorAll('.active').forEach(n=>n.classList.remove('active'));b.classList.add('active');if(innerWidth<=850){settings.rightCollapsed=true;sidebars();}};
+      b.onclick=()=>{if(innerWidth<=850){settings.rightCollapsed=true;sidebars();}jumpToMessage(m.id);};
       nav.append(b);}
     nav.scrollTop=scroll;
     $('#nav-count').textContent=items.length+' 条';
