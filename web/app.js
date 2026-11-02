@@ -131,6 +131,13 @@
   $('#dismiss').onclick=()=>{window.getSelection()?.removeAllRanges();clearSelection();};
 
   /* ---------- single-message reading (focus modal) ---------- */
+  function focusWidth(){
+    const width=Math.max(480,Math.min(1800,Number(settings.focusWidth)||880));
+    $('#focus-window').style.setProperty('--focus-width',width+'px');
+    $('#focus-width').value=width;
+    $('#focus-width-value').value=width+' px';
+  }
+  $('#focus-width').oninput=e=>{settings.focusWidth=Number(e.target.value);focusWidth();save();};
   function focusRender(){
     const m=items[focusIndex];if(!m)return;
     focusBody.replaceChildren(createCard(m));
@@ -144,7 +151,7 @@
     const card=sel?sel.items[sel.items.length-1].card:null;
     if(card){const i=items.findIndex(m=>m.id===card.dataset.id);if(i>=0)idx=i;}
     if(idx<0)idx=0;
-    focusIndex=idx;focusRender();
+    focusIndex=idx;focusWidth();focusRender();
     const modal=$('#focus-modal');modal.hidden=false;
     $('#focus-toggle').classList.add('active');
     toast('单条阅读 · 第 '+(idx+1)+' 条');

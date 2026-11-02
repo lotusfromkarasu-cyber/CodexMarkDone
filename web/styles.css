@@ -105,8 +105,8 @@ body.multi .msg-check-wrap{display:inline-flex}
 .message-body code{font-family:var(--mono);font-size:12.5px;background:var(--code-bg);border:1px solid var(--border);border-radius:5px;padding:1px 5px}
 .message-body pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;overflow-x:auto;line-height:1.5}
 .message-body pre code{background:none;border:0;padding:0;font-size:12.5px}
-.message-body table{border-collapse:collapse;margin:.5em 0;font-size:13px}
-.message-body th,.message-body td{border:1px solid var(--border);padding:5px 10px}
+.message-body table{border-collapse:collapse;margin:.5em auto;font-size:13px}
+.message-body th,.message-body td{border:1px solid var(--border);padding:5px 10px;text-align:center;vertical-align:middle}
 .message-body th{background:var(--panel2)}
 .message-body hr{border:0;border-top:1px solid var(--border);margin:10px 0}
 .message-body a{color:var(--accent);text-decoration:none}
@@ -162,7 +162,11 @@ mark{background:var(--accent-soft);color:var(--accent);border-radius:3px;padding
 /* single-message reading (focus modal) */
 #focus-modal{position:fixed;inset:0;z-index:70;background:var(--modal-mask);display:flex;align-items:center;justify-content:center;padding:26px}
 #focus-modal[hidden]{display:none}
-#focus-window{width:min(880px,96vw);max-height:88vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+#focus-window{width:min(var(--focus-width,880px),calc(100vw - 52px));max-height:88vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+#focus-width-control{display:flex;align-items:center;gap:7px;margin-left:auto;white-space:nowrap;font-size:12px}
+#focus-width{width:120px;accent-color:var(--accent)}
+#focus-width-value{min-width:48px;font-variant-numeric:tabular-nums}
+@media(max-width:650px){#focus-head{flex-wrap:wrap}#focus-meta{flex-basis:calc(100% - 40px)}#focus-width-control{order:1;margin-left:0}#focus-width{width:100px}}
 #focus-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);font-size:12.5px;color:var(--muted)}
 #focus-close{border:0;background:none;color:var(--muted);font-size:17px;line-height:1;padding:2px 8px}
 #focus-close:hover{color:var(--text)}

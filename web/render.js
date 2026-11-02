@@ -2,6 +2,27 @@
 (() => {
   const esc = s => String(s).replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
   const md = window.markdownit({html:false, linkify:true, breaks:true});
+  // CommonMark treats punctuation beside CJK text as a delimiter boundary.
+  // Relax only that boundary for double asterisks, using the native emphasis
+  // pairing algorithm so escapes, code spans, nesting and math remain intact.
+  const cjk = c => /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(c || '');
+  const punctuation = c => /[\p{P}\p{S}]/u.test(c || '');
+  md.inline.ruler.before('emphasis','reader_cjk_strong',state=>{
+    if(!state.readerCjkStrong){
+      state.readerCjkStrong=true;
+      const scan=state.scanDelims;
+      state.scanDelims=function(pos,split){
+        const result=scan.call(this,pos,split);
+        if(this.src[pos]==='*'&&result.length===2){
+          const before=this.src[pos-1],after=this.src[pos+2];
+          if(cjk(before)&&punctuation(after))result.can_open=true;
+          if(punctuation(before)&&cjk(after))result.can_close=true;
+        }
+        return result;
+      };
+    }
+    return false;
+  });
   function imageSrc(src) {
     const value=String(src||'').trim();
     if (/^(?:data:image\/|blob:|https?:\/\/)/i.test(value)) return value;
