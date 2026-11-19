@@ -43,6 +43,32 @@ const web=process.env.MARKDONE_WEB_ROOT||path.join(__dirname,'../web');
   assert.match(rendered[8],/class="formula/);
   assert.equal(await page.locator('#messages strong').count(),3); // two bold sections plus second reply
   assert.deepEqual(await page.locator('#messages strong code').allTextContents(),['n_top','n_bottom']);
+  const mathTable=await page.evaluate(()=>{
+   const source=String.raw`正文。
+
+| 波长 | 有源区内 \(\max |E_z/E_0|\) | 含义 |
+|---|---:|---|
+| 7.7 µm | $|x|$ | A \| B |
+| 8.0 µm | $\|x\|$ | ${'`\\|`'} |
+
+后续正文。`;
+   const doc=document.createElement('div');
+   doc.innerHTML=ReaderRender.render(source);
+   const table=doc.querySelector('table');
+   if(!table)return null;
+   return {columns:table.tHead.rows[0].cells.length,rows:[...table.tBodies[0].rows].map(row=>row.cells.length),
+    formulas:[...table.querySelectorAll('.formula:not(.error)')].map(node=>node.dataset.latex),
+    values:[...table.querySelectorAll('td:last-child')].map(node=>node.textContent),
+    alignment:table.tHead.rows[0].cells[1].style.textAlign,following:table.nextElementSibling.textContent};
+  });
+  assert.deepEqual(mathTable,{columns:3,rows:[3,3],formulas:[String.raw`\max |E_z/E_0|`,'|x|',String.raw`\|x\|`],
+   values:['A | B','|'],alignment:'right',following:'后续正文。'});
+  const prices=await page.evaluate(()=>{
+   const doc=document.createElement('div');
+   doc.innerHTML=ReaderRender.render('| A | B |\n|---|---|\n| $5 | $3 |');
+   return [...doc.querySelectorAll('td')].map(cell=>cell.textContent);
+  });
+  assert.deepEqual(prices,['$5','$3']);
   const table=await page.locator('#messages table').evaluate(el=>{
    const r=el.getBoundingClientRect(),p=el.closest('.message-body').getBoundingClientRect();
    return {offset:Math.abs((r.left+r.right)-(p.left+p.right)),align:getComputedStyle(el.querySelector('td')).textAlign};
@@ -61,6 +87,6 @@ const web=process.env.MARKDONE_WEB_ROOT||path.join(__dirname,'../web');
   await page.setViewportSize({width:600,height:850});
   assert((await page.locator('#focus-window').boundingBox()).width<=548);
   assert.deepEqual(errors,[]);
-  console.log('CJK bold, escapes/code/math, centered table, adjustable/persisted focus width and narrow viewport passed.');
+  console.log('CJK bold, math and dollar amounts in tables, centered table, adjustable/persisted focus width and narrow viewport passed.');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

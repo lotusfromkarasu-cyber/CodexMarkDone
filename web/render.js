@@ -74,9 +74,78 @@
   }
   md.inline.ruler.before('escape','reader_math',(state,silent)=>{
     const m=matchMath(state.src,state.pos); if(!m)return false;
-    if(!silent){const t=state.push('reader_math','',0);t.content=m.body;t.meta={display:m.display};}
+    if(!silent){
+      const t=state.push('reader_math','',0);
+      t.content=m.body;t.meta={display:m.display,start:state.pos,end:m.end};
+    }
     state.pos=m.end;return true;
   });
+  // markdown-it splits table cells before it parses inline math. Temporarily
+  // mask formula pipes without changing source offsets or the native GFM rule.
+  const {fn:parseTable,alt:tableAlternates}=md.block.ruler.__rules__.find(rule=>rule.name==='table');
+  md.block.ruler.at('table',(state,start,end,silent)=>{
+    const src=state.src;
+    const lineStart=row=>state.bMarks[row]+state.tShift[row];
+    const separator=start+1;
+    const delimiter=separator<end ? src.slice(lineStart(separator),state.eMarks[separator]) : '';
+    if(!delimiter.includes('-') || /[^|:\t -]/.test(delimiter)){
+      return parseTable(state,start,end,silent);
+    }
+    const columns=delimiter.split('|').filter(cell=>cell.trim()).length;
+    const columnCount=line=>{
+      const cells=line.trim().split(/(?<!\\)\|/);
+      return cells.length-(cells[0]===''?1:0)-(cells.at(-1)===''?1:0);
+    };
+    // A private-use character of the same width keeps the block parser's offsets valid.
+    let marker,from=0;
+    const pieces=[];
+    const protect=row=>{
+      const offset=lineStart(row);
+      const line=src.slice(offset,state.eMarks[row]);
+      if(!line.includes('|') || !/[$\\]/.test(line))return;
+      const tokens=[];
+      let masked='',last=0;
+      md.inline.parse(line,md,state.env,tokens);
+      for(const token of tokens){
+        if(token.type!=='reader_math')continue;
+        const {start:begin,end:finish}=token.meta;
+        const raw=line.slice(begin,finish);
+        if(!raw.includes('|'))continue;
+        if(!marker)marker=['\ue000','\ue001','\ue002'].find(char=>!src.includes(char));
+        if(!marker)return;
+        masked+=line.slice(last,begin)+raw.replaceAll('|',marker);
+        last=finish;
+      }
+      if(!last)return;
+      masked+=line.slice(last);
+      // Preserve valid cells such as "| $5 | $3 |" where a dollar amount
+      // in one column can resemble a math delimiter spanning both columns.
+      if(columnCount(line)===columns && columnCount(masked)<columns)return;
+      pieces.push(src.slice(from,offset),masked);
+      from=state.eMarks[row];
+    };
+    protect(start);
+    if(!silent){
+      for(let row=start+2;row<end;row++){
+        const indent=state.sCount[row]-state.blkIndent;
+        if(indent<0 || indent>=4 || state.isEmpty(row))break;
+        protect(row);
+      }
+    }
+    if(!pieces.length)return parseTable(state,start,end,silent);
+    const firstToken=state.tokens.length;
+    state.src=pieces.join('')+src.slice(from);
+    try{
+      const parsed=parseTable(state,start,end,silent);
+      for(let i=firstToken;i<state.tokens.length;i++){
+        const token=state.tokens[i];
+        if(token.type==='inline')token.content=token.content.replaceAll(marker,'|');
+      }
+      return parsed;
+    }finally{
+      state.src=src;
+    }
+  },{alt:tableAlternates});
   md.block.ruler.before('fence','reader_math_block',(state,start,end,silent)=>{
     const pos=state.bMarks[start]+state.tShift[start];
     const m=matchMath(state.src,pos);if(!m || !m.display)return false;
