@@ -41,8 +41,8 @@ IMAGE_MIME_TYPES = {
     '.webp': 'image/webp',
 }
 MAX_LOCAL_IMAGE_BYTES = 32 * 1024 * 1024
-VERSION = '0.2.2'
-BUILD = '20261024-word-regular'
+VERSION = '0.2.3'
+BUILD = '20261126-sidebar'
 
 def rollout_path(path):
     """Codex keeps the canonical JSONL path in SQLite after compression."""
@@ -282,7 +282,8 @@ class Library:
 
     def _index_key(self):
         parts = []
-        for name in ('state_5.sqlite', 'state_5.sqlite-wal', '.codex-global-state.json'):
+        for name in ('state_5.sqlite', 'state_5.sqlite-wal', '.codex-global-state.json',
+                     'sqlite/codex.db', 'sqlite/codex.db-wal', 'sqlite/codex-dev.db', 'sqlite/codex-dev.db-wal'):
             p = self.home / name
             try:
                 st = p.stat()
@@ -302,11 +303,12 @@ class Library:
                 connection = sqlite3.connect(db.as_uri() + '?mode=ro', uri=True, timeout=1)
                 connection.row_factory = sqlite3.Row
                 projects = [dict(x) for x in connection.execute('SELECT id,name,position FROM projects ORDER BY position')]
-                has_ts = any(r['name'] == 'thread_source' for r in connection.execute('PRAGMA table_info(threads)'))
+                columns = {r['name'] for r in connection.execute('PRAGMA table_info(threads)')}
+                extra = ''.join(',' + key for key in ('thread_source', 'attached_thread_parent_id') if key in columns)
                 select = ("SELECT id,coalesce(nullif(name,''),title) as title,first_user_message,rollout_path,project_id,cwd,is_pinned,archived,section_position,recency_at_ms,updated_at_ms"
-                          + (",thread_source" if has_ts else ""))
+                          + extra)
                 threads = [dict(x) for x in connection.execute(select + " FROM threads ORDER BY recency_at_ms DESC,updated_at_ms DESC")]
-                if has_ts:
+                if 'thread_source' in columns:
                     # Subagent and guardian-review sessions are internal helper
                     # conversations, not standalone Codex conversations.
                     threads = [t for t in threads if t['thread_source'] not in ('subagent', 'guardian_review')]
@@ -321,113 +323,122 @@ class Library:
                     connection.close()
             state = read_json(self.home / '.codex-global-state.json', {})
             pinned_threads = state.get('pinned-thread-ids', []) or []
-            local_projects = state.get('local-projects', {}) or {}
+            projects, aliases, root_candidates = self._sidebar_projects(state, projects, roots)
             assignments = state.get('thread-project-assignments', {}) or {}
-            pinned_projects = state.get('pinned-project-ids', []) or []
+            projectless = set(state.get('projectless-thread-ids', []) or [])
+            catalog = self._desktop_threads()
 
             # Codex Desktop publishes its sidebar display titles in its own
             # catalog database. Prefer those so names match the Codex sidebar
             # exactly; cloud (chatgpt) conversations are never shown.
-            catalog_titles = {}
-            try:
-                dev_db = self.home / 'sqlite' / 'codex-dev.db'
-                dev = sqlite3.connect(dev_db.as_uri() + '?mode=ro', uri=True, timeout=1)
-                try:
-                    for row in dev.execute(
-                            "SELECT thread_id, display_title FROM local_thread_catalog WHERE source_kind != 'chatgpt'"):
-                        if row[1]:
-                            catalog_titles[row[0]] = row[1]
-                finally:
-                    dev.close()
-            except (sqlite3.Error, OSError):
-                pass
-
-            roots_by_project = {}
-            for x in roots:
-                roots_by_project.setdefault(x['project_id'], []).append(x['path'])
-            position_of = {p['id']: i for i, p in enumerate(projects)}
-
-            # Map Codex local-project ids (legacy UUID or local-...) to the
-            # server project ids used by the projects table, matching root sets.
-            lp_to_server = {}
-            for lp_id, lp in local_projects.items():
-                wanted = {self._norm(p) for p in (lp.get('rootPaths') or [])}
-                if not wanted:
-                    continue
-                for pid, proots in roots_by_project.items():
-                    if {self._norm(p) for p in proots} == wanted:
-                        lp_to_server[lp_id] = pid
-                        break
-
-            # A ChatGPT web project is hosted under the local .chatgpt-projects
-            # folder; those projects never appear in the local sidebar.
-            cloud = {pid for pid, proots in roots_by_project.items()
-                     if any('.chatgpt-projects' in self._norm(p) for p in proots)}
-
-            # cwd fallback candidates: exact roots first, then leaf names.
-            root_candidates = sorted(
-                ((self._norm(x['path']), x['project_id']) for x in roots),
-                key=lambda r: (position_of.get(r[1], 99), 0))
-            leaf_to_project = {}
-            for p in projects:
-                leaves = {self._leaf(r) for r in roots_by_project.get(p['id'], [])}
-                leaves.add(self._leaf(p['name']))
-                for leaf in leaves:
-                    leaf_to_project.setdefault(leaf, p['id'])
-
-            def assign(t):
-                pid = t.get('project_id')
-                if pid:
-                    return pid
-                row = assignments.get(t['id']) or {}
-                if row.get('projectKind') == 'local':
-                    pid = lp_to_server.get(row.get('projectId'))
-                    if pid:
-                        return pid
-                cwd = self._norm(t.get('cwd') or '')
-                if not cwd:
-                    return None
-                for root, pid in root_candidates:
-                    if cwd == root or cwd.startswith(root + os.sep):
-                        return pid
-                return leaf_to_project.get(self._leaf(cwd))
-
             for t in threads:
-                from_catalog = t['id'] in catalog_titles
-                title = catalog_titles.get(t['id']) or ''
-                if not from_catalog:
-                    title = (t.get('title') or '').strip()
+                entry = catalog.get(t['id'], {})
+                catalog_title = entry.get('display_title')
+                title = catalog_title or (t.get('title') or '').strip()
                 if not title:
                     title = (t.get('first_user_message') or '').strip()
                 if not title:
                     title = self._fallback_title(t['rollout_path'])
                     if not title:
                         title = '未命名对话'
-                t['title'] = self._short(title if from_catalog else self._clean_title(title))
-                t['project_id'] = assign(t)
-                if t['project_id'] in cloud:
-                    t['project_id'] = None
+                t['title'] = self._short(title if catalog_title else self._clean_title(title))
+                row = assignments.get(t['id']) or {}
+                pid = aliases.get(row.get('projectId')) if row.get('projectKind') == 'local' else None
+                if not pid and t['id'] not in projectless:
+                    pid = aliases.get(entry.get('project_id')) or aliases.get(t.get('project_id'))
+                    if not pid and not row and not t.get('attached_thread_parent_id'):
+                        cwd = self._norm(t.get('cwd') or '')
+                        pid = next((p for root, p in root_candidates
+                                    if cwd == root or cwd.startswith(root + os.sep)), None)
+                t['project_id'] = pid
                 t['is_pinned'] = bool(t['is_pinned'] or t['id'] in pinned_threads)
                 t['pin_order'] = pinned_threads.index(t['id']) if t['id'] in pinned_threads else t['section_position']
 
-            # Pinned projects first, in Codex pin order.
-            resolved_pins = []
-            for pid in pinned_projects:
-                rid = pid if pid in {p['id'] for p in projects} else lp_to_server.get(pid)
-                if rid and rid not in resolved_pins and rid not in cloud:
-                    resolved_pins.append(rid)
-            for p in projects:
-                p['is_pinned'] = p['id'] in resolved_pins
-                p['pin_order'] = resolved_pins.index(p['id']) if p['is_pinned'] else None
-            projects = [p for p in projects if p['id'] not in cloud]
-            projects.sort(key=lambda p: (0 if p['is_pinned'] else 1,
-                                         p['pin_order'] if p['is_pinned'] else p['position']))
+            by_id = {t['id']: t for t in threads}
+            for t in threads:
+                parent = by_id.get(t.get('attached_thread_parent_id'))
+                seen = {t['id']}
+                while parent and parent['id'] not in seen:
+                    seen.add(parent['id'])
+                    if parent['project_id']:
+                        t['project_id'] = parent['project_id']
+                        break
+                    parent = by_id.get(parent.get('attached_thread_parent_id'))
+                if t.get('attached_thread_parent_id'):
+                    t['is_pinned'] = False
             payload = {'projects': projects, 'threads': threads}
             payload['revision'] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
             self.catalog = payload
             self._idx_key = _key
             self._idx_cache = payload
             return payload
+
+    def _desktop_threads(self):
+        catalog = {}
+        for name in ('codex.db', 'codex-dev.db'):
+            path = self.home / 'sqlite' / name
+            try:
+                db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=1)
+                db.row_factory = sqlite3.Row
+                try:
+                    cols = {r['name'] for r in db.execute('PRAGMA table_info(local_thread_catalog)')}
+                    if not {'thread_id', 'display_title', 'source_kind'} <= cols:
+                        continue
+                    select = 'thread_id,display_title' + (',project_id' if 'project_id' in cols else '')
+                    where = "source_kind!='chatgpt'" + (" AND host_id='local'" if 'host_id' in cols else '')
+                    for row in db.execute('SELECT ' + select + ' FROM local_thread_catalog WHERE ' + where):
+                        catalog.setdefault(row['thread_id'], dict(row))
+                finally:
+                    db.close()
+            except (OSError, sqlite3.Error):
+                pass
+            if catalog:
+                break
+        return catalog
+
+    def _sidebar_projects(self, state, server_projects, roots):
+        server_roots = {}
+        for row in roots:
+            server_roots.setdefault(row['project_id'], set()).add(self._norm(row['path']))
+        registry = state.get('local-projects')
+        if registry is None:
+            registry = {p['id']: {'name': p['name'], 'rootPaths': server_roots.get(p['id'], [])}
+                        for p in server_projects}
+
+        projects, aliases, candidates = {}, {}, []
+        for pid, row in registry.items():
+            paths = {self._norm(r) for r in row.get('rootPaths', [])}
+            if pid.startswith('g-p-') or any('.chatgpt-projects' in r for r in paths):
+                continue
+            projects[pid] = {'id': pid, 'name': row.get('name') or pid, 'is_pinned': False}
+            aliases[pid] = pid
+            candidates.extend((r, pid) for r in paths)
+            for server_id, sr in server_roots.items():
+                if paths and sr == paths:
+                    aliases.setdefault(server_id, pid)
+        mappings = state.get('app-server-project-id-by-legacy-project-id-by-host', {}) or {}
+        local = self._norm(self.home)
+        for host, mapping in mappings.items():
+            if host != 'local' and not (host.startswith('local:') and self._norm(host[6:]) == local):
+                continue
+            for legacy, server in mapping.items():
+                if legacy in projects and server in server_roots:
+                    aliases[server] = legacy
+
+        atoms = next((v for k, v in state.items() if k.startswith('electron-owner-atoms')
+                      and isinstance(v, dict) and 'unified-sidebar-project-order-v1' in v), {})
+        def ids(items):
+            return list(dict.fromkeys(aliases[p] for key in items
+                        if (p := key.removeprefix('codex:project:')) in aliases))
+        pins = ids(state.get('pinned-project-ids', []) or [])
+        pin_order = [p for p in ids(atoms.get('unified-sidebar-pinned-order-v1', [])) if p in pins]
+        pin_order += [p for p in pins if p not in pin_order]
+        order = list(dict.fromkeys(pin_order + ids(atoms.get('unified-sidebar-project-order-v1', []))
+                                  + ids(state.get('project-order', []) or []) + list(projects)))
+        for position, p in enumerate(order):
+            projects[p].update(position=position, is_pinned=p in pins,
+                               pin_order=pin_order.index(p) if p in pins else None)
+        return [projects[p] for p in order], aliases, sorted(candidates, key=lambda r: -len(r[0]))
 
     def _reference_path(self, reference):
         # history_base.thread_id is a physical rollout ID, not necessarily a

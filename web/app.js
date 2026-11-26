@@ -173,12 +173,27 @@
     const nav=$('#library'),scroll=nav.scrollTop,q=$('#project-search').value.toLowerCase(),archived=$('#archives').checked;
     nav.replaceChildren();
     const rows=library.threads.filter(t=>!!t.archived===archived&&t.title.toLowerCase().includes(q));
-    function group(id,name,threads,pin=false){
+    function threadButton(t){
+      const b=document.createElement('button');
+      b.className='thread-link'+(t.id===current?' active':'');
+      b.textContent=(t.is_pinned?'📌 ':'')+(t.title||'未命名对话');
+      const parent=library.threads.find(row=>row.id===t.attached_thread_parent_id);
+      b.title=parent?.title?parent.title+' › '+t.title:t.title;
+      b.onclick=()=>{if(t.id!==current)openThread(t.id);};
+      return b;
+    }
+    function group(id,name,threads,pin=false,container=nav,isBranch=false){
       if(!threads.length&&(q||archived))return;
       const d=document.createElement('details');d.open=q?true:settings.groups?.[id]===true;
+      if(isBranch)d.className='side-chat-branch';
       const s=document.createElement('summary');s.textContent=(pin?'📌 ':'')+name+' · '+threads.length;d.append(s);
-      for(const t of threads){const b=document.createElement('button');b.className='thread-link'+(t.id===current?' active':'');b.textContent=(t.is_pinned?'📌 ':'')+(t.title||'未命名对话');b.title=t.title;b.onclick=()=>{if(t.id!==current)openThread(t.id);};d.append(b);}
-      d.ontoggle=()=>{settings.groups??={};settings.groups[id]=d.open;save();};nav.append(d);
+      const sideChats=[];
+      for(const t of threads){
+        if(!isBranch&&t.attached_thread_parent_id)sideChats.push(t);
+        else d.append(threadButton(t));
+      }
+      if(sideChats.length)group(id+':side-chats','侧边栏对话',sideChats,false,d,true);
+      d.ontoggle=()=>{settings.groups??={};settings.groups[id]=d.open;save();};container.append(d);
     }
     const pins=rows.filter(t=>t.is_pinned).sort((a,b)=>(a.pin_order??99)-(b.pin_order??99));if(pins.length)group('pinned','置顶对话',pins,true);
     for(const p of library.projects)group(p.id,p.name,rows.filter(t=>t.project_id===p.id&&!t.is_pinned),p.is_pinned);

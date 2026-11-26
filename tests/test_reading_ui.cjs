@@ -14,7 +14,10 @@ const web=process.env.MARKDONE_WEB_ROOT||path.join(__dirname,'../web');
    if(url.pathname==='/api/settings'){
     if(route.request().method()==='POST')settings=route.request().postDataJSON();
     data={settings,token:'test'};
-   }else if(url.pathname==='/api/library')data={threads:[{id:'test',title:'Reading fixture'}],projects:[],revision:'1'};
+   }else if(url.pathname==='/api/library')data={
+    threads:[{id:'test',title:'Reading fixture',project_id:'project'},{id:'side',title:'Side chat',project_id:'project',attached_thread_parent_id:'test'}],
+    projects:[{id:'project',name:'Project fixture'}],revision:'1'
+   };
    else if(url.pathname==='/api/thread')data={id:'test',title:'Reading fixture',revision:'1',messages:[{id:'a1',role:'assistant',raw},{id:'a2',role:'assistant',raw:'第二条 **正常加粗**。'}]};
    else if(url.pathname.startsWith('/api/'))data={ok:true};
    if(data!==undefined)return route.fulfill({json:data});
@@ -23,6 +26,9 @@ const web=process.env.MARKDONE_WEB_ROOT||path.join(__dirname,'../web');
   });
   await page.goto('http://markdone.test/');
   await page.waitForFunction(()=>document.querySelectorAll('#messages .message').length===2);
+  const branch=page.locator('#library .side-chat-branch');
+  assert.equal(await branch.locator('summary').textContent(),'侧边栏对话 · 1');
+  assert.equal(await branch.locator('button').getAttribute('title'),'Reading fixture › Side chat');
   const rendered=await page.evaluate(()=>{
    const R=ReaderRender;
    return [

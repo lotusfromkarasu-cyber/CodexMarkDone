@@ -83,11 +83,15 @@ class LibraryIndexTests(unittest.TestCase):
             ('t-none', 'r.jsonl', 'C:\\Temp\\Unassigned', 'none', 0, 0),
             ('t-cloud', 'r.jsonl', 'C:\\Users\\Example\\.codex\\.chatgpt-projects\\g-x', 'cloud', 0, 0),
         ])
+        db.execute('ALTER TABLE threads ADD COLUMN attached_thread_parent_id TEXT')
+        db.execute("INSERT INTO threads(id,rollout_path,cwd,title,attached_thread_parent_id) VALUES('t-side','s.jsonl','C:\\Temp','side','t-leaf')")
+        db.execute("INSERT INTO threads(id,rollout_path,cwd,title) VALUES('t-same-leaf','s.jsonl','E:\\Research','other root')")
         db.commit()
         db.close()
         state = {
             'local-projects': {
                 '11111111-2222-4333-8444-555555555555': {'name': 'Workspace One', 'rootPaths': ['C:\\Projects\\WorkspaceOne']},
+                'p-research': {'name': 'Project Two', 'rootPaths': ['D:\\Projects\\Research']},
             },
             'thread-project-assignments': {
                 't-lp': {'projectKind': 'local', 'projectId': '11111111-2222-4333-8444-555555555555'},
@@ -111,9 +115,12 @@ class LibraryIndexTests(unittest.TestCase):
         self.assertEqual([p['name'] for p in data['projects']], ['Workspace One', 'Project Two'])
         self.assertNotIn('p-cloud', {p['id'] for p in data['projects']})
         by_id = {t['id']: t for t in data['threads']}
-        self.assertEqual(by_id['t-root']['project_id'], 'p-workspace')
-        self.assertEqual(by_id['t-lp']['project_id'], 'p-workspace')
+        self.assertEqual(by_id['t-root']['project_id'], '11111111-2222-4333-8444-555555555555')
+        self.assertEqual(by_id['t-lp']['project_id'], '11111111-2222-4333-8444-555555555555')
         self.assertEqual(by_id['t-leaf']['project_id'], 'p-research')
+        self.assertEqual(by_id['t-side']['project_id'], 'p-research')
+        self.assertEqual(by_id['t-side']['attached_thread_parent_id'], 't-leaf')
+        self.assertIsNone(by_id['t-same-leaf']['project_id'])
         self.assertIsNone(by_id['t-none']['project_id'])
         self.assertIsNone(by_id['t-cloud']['project_id'])
         self.assertTrue(by_id['t-root']['is_pinned'])
